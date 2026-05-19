@@ -1,12 +1,40 @@
 import './style.css'
+import {
+  type 청크상태,
+  type 헤더오류키,
+  바이트를음악기호로,
+  음악기호를바이트로,
+  음악기호찾기,
+  오디오표본만들기,
+  코드톤수,
+  괴르첼,
+  끝표식초,
+  청크반복,
+  청크크기,
+  프레임복구하기,
+  프레임만들기,
+  프리앰블주파수,
+  프리앰블초,
+  표본율,
+  반복청크바이트수구하기,
+  기호길이초구하기,
+  기호구간시간초구하기,
+  기호시간초구하기,
+  기호위치찾기,
+  압축하기,
+  압축풀기,
+  헤더읽기,
+  의사잡음,
+} from './음악모뎀'
 
 type 송신상태 = {
   맥락: AudioContext
   이득: GainNode
   소스: AudioBufferSourceNode
   시작초: number
-  심볼수: number
-  심볼들: number[]
+  기호수: number
+  기호들: number[]
+  기호누적초들: Float32Array
 }
 
 type 수신상태 = {
@@ -17,53 +45,27 @@ type 수신상태 = {
 }
 
 type 수신단계 = '대기' | '준비' | '본문' | '완료' | '오류'
-type 청크상태 = '대기' | '성공' | '실패'
-type 소리정체성 = '로파이' | '깨끗함' | '블루스' | '재즈' | '덥스텝'
+type 소리정체성 = '재즈피아노'
 type 언어 = 'ko' | 'en'
 
-type 압축결과 = {
-  바이트: Uint8Array
-  압축됨: boolean
+type 오디오결과 = {
+  버퍼: AudioBuffer
+  기호누적초들: Float32Array
 }
-
-type 헤더결과 =
-  | {
-      성공: true
-      본문길이: number
-      압축됨: boolean
-      반복수: number
-    }
-  | {
-      성공: false
-      이유: string
-    }
-
-const 마법값 = [0x53, 0x4e, 0x50, 0x31]
-const 버전 = 1
-const 균형모드 = 1
-const 청크크기 = 64
-const 청크반복 = 3
-const 심볼밀리초 = 60
-const 표본율 = 48_000
-const 프리앰블초 = 1
-const 끝표식초 = 0.32
-const 데이터주파수 = [2200, 3000, 3800, 4600, 5400, 6200, 7000, 7800]
-const 프리앰블주파수 = [1200, 1800]
-const 끝표식주파수 = [8600, 9400]
 
 const 현재언어: 언어 = navigator.language.toLowerCase().startsWith('ko') ? 'ko' : 'en'
 
 const 글 = {
   ko: {
-    제목: '소리로 텍스트 붙여넣기.',
+    제목: '재즈 피아노로 텍스트 붙여넣기.',
     상태: '네트워크 없음. 메모리만 사용.',
     텍스트: '텍스트',
     복사: '복사',
     자리표시자: 'URL, 코드 조각, 에러 로그, 한글/영문 텍스트를 붙여넣으세요.',
     길이경고: '8KB가 넘으면 전송 시간이 길어지고 실패 확률이 높아집니다.',
     모드: '모드',
-    균형: '균형',
-    모드설명: 'MVP는 8-FSK · 60ms 심볼 · 2.2-7.8kHz · CRC 청크 복구를 사용합니다.',
+    균형: '재즈',
+    모드설명: 'MVP는 재즈 블루스 코드 진행 위에 음정 2비트 + 리듬 2비트를 싣고, CRC 청크 복구를 사용합니다.',
     볼륨: '출력 볼륨',
     소리정체성: '소리 정체성',
     보내기: '보내기',
@@ -80,7 +82,7 @@ const 글 = {
     압축값: '브라우저 내장 Deflate',
     복구값: 'CRC가 맞는 반복 청크 채택',
     단계: '단계',
-    심볼: '심볼',
+    심볼: '음표',
     청크들: '청크',
     신호대잡음: 'SNR',
     남은시간: '남은 시간',
@@ -94,7 +96,7 @@ const 글 = {
     마이크없음: '마이크를 사용할 수 없음',
     듣는중: '듣는 중',
     받는중: '수신 중',
-    프레임없음: 'Sonopaste 프레임이 아님',
+    프레임없음: 'Jazzmodem 프레임이 아님',
     미지원프레임: '지원하지 않는 프레임',
     헤더오류: '헤더 CRC 실패',
     길이오류: '잘못된 길이',
@@ -113,19 +115,19 @@ const 글 = {
     복구반복: '복구 반복',
     소리시각화: '소리 시각화',
     출력레벨: '출력 레벨',
-    톤분포: '8-FSK 톤',
+    톤분포: '코드 톤',
     없음: '없음',
   },
   en: {
-    제목: 'Paste text through sound.',
+    제목: 'Paste text through jazz piano.',
     상태: 'No network. Memory only.',
     텍스트: 'Text',
     복사: 'Copy',
     자리표시자: 'Paste a URL, source snippet, error log, or Korean/English text here.',
     길이경고: 'Over 8KB takes longer and is more likely to fail.',
     모드: 'Mode',
-    균형: 'Balanced',
-    모드설명: 'MVP uses 8-FSK · 60 ms symbols · 2.2-7.8 kHz · CRC chunk recovery.',
+    균형: 'Jazz',
+    모드설명: 'MVP carries 2 pitch bits + 2 rhythm bits over a jazz-blues progression with CRC chunk recovery.',
     볼륨: 'Output volume',
     소리정체성: 'Sound identity',
     보내기: 'Send',
@@ -142,7 +144,7 @@ const 글 = {
     압축값: 'Native browser Deflate',
     복구값: 'valid repeated chunks win',
     단계: 'Phase',
-    심볼: 'Symbols',
+    심볼: 'Notes',
     청크들: 'Chunks',
     신호대잡음: 'SNR',
     남은시간: 'ETA',
@@ -156,7 +158,7 @@ const 글 = {
     마이크없음: 'Mic unsupported',
     듣는중: 'Listening',
     받는중: 'Receiving',
-    프레임없음: 'No Sonopaste frame',
+    프레임없음: 'No Jazzmodem frame',
     미지원프레임: 'Unsupported frame',
     헤더오류: 'Header CRC failed',
     길이오류: 'Invalid length',
@@ -175,7 +177,7 @@ const 글 = {
     복구반복: 'Recovery repeats',
     소리시각화: 'Sound view',
     출력레벨: 'Output level',
-    톤분포: '8-FSK tones',
+    톤분포: 'Chord tones',
     없음: 'None',
   },
 } as const
@@ -184,39 +186,11 @@ const 소리정체성목록: Record<
   소리정체성,
   { 이름: Record<언어, string>; 설명: Record<언어, string> }
 > = {
-  로파이: {
-    이름: { ko: '로파이 테이프', en: 'Lo-fi Tape' },
+  재즈피아노: {
+    이름: { ko: '블루 재즈 피아노', en: 'Blue Jazz Piano' },
     설명: {
-      ko: '기본값. 둥근 사인파, 살짝 흔들리는 테이프 질감, 덜 피곤한 톤.',
-      en: 'Default. Rounded sine tones, light tape wobble, less fatigue.',
-    },
-  },
-  깨끗함: {
-    이름: { ko: '클린 모뎀', en: 'Clean Modem' },
-    설명: {
-      ko: '진단용. 가장 읽기 쉬운 순수 톤으로 디코딩 여유가 큽니다.',
-      en: 'Diagnostic. Pure tones with the strongest decode margin.',
-    },
-  },
-  블루스: {
-    이름: { ko: '블루 노트', en: 'Blue Note' },
-    설명: {
-      ko: '느린 트레몰로와 따뜻한 2배음으로 블루스 느낌을 얹습니다.',
-      en: 'Slow tremolo and warm second harmonics over the same data tones.',
-    },
-  },
-  재즈: {
-    이름: { ko: '재즈 룸', en: 'Jazz Room' },
-    설명: {
-      ko: '가벼운 배음과 공기감으로 늦은 밤 라운지 같은 질감.',
-      en: 'Airier upper harmonics with a late-night room texture.',
-    },
-  },
-  덥스텝: {
-    이름: { ko: '덥스텝 게이트', en: 'Dubstep Gate' },
-    설명: {
-      ko: '짧은 URL 전송이나 데모에 어울리는 묵직한 게이트 움직임.',
-      en: 'Heavier gated movement for short sends and demos.',
+      ko: '12마디 재즈 블루스와 ii-V 턴어라운드 위에서 음정과 스윙 리듬이 함께 데이터를 나릅니다.',
+      en: 'Data rides on pitch and swing rhythm over a 12-bar jazz blues with ii-V turnaround.',
     },
   },
 }
@@ -231,7 +205,7 @@ if (!뿌리) {
   <main class="shell">
     <header class="topbar">
       <div>
-        <p class="eyebrow">Sonopaste</p>
+        <p class="eyebrow">${현재언어 === 'ko' ? '재즈모뎀' : 'Jazzmodem'}</p>
         <h1>${문구('제목')}</h1>
       </div>
       <div class="status-pill">${문구('상태')}</div>
@@ -268,7 +242,7 @@ if (!뿌리) {
         <div class="control-block">
           <label for="soundTheme">${문구('소리정체성')}</label>
           <select id="soundTheme">${소리옵션HTML()}</select>
-          <p class="muted" id="themeDescription">${소리정체성목록.로파이.설명[현재언어]}</p>
+          <p class="muted" id="themeDescription">${소리정체성목록.재즈피아노.설명[현재언어]}</p>
         </div>
 
         <div class="preview-block" aria-label="${문구('전송미리보기')}">
@@ -307,11 +281,8 @@ if (!뿌리) {
             <div class="vu-track"><i id="vuFill"></i></div>
           </div>
           <div class="eq-grid" id="eqGrid">
-            ${데이터주파수
-              .map(
-                (주파수, 순서) =>
-                  `<span class="eq-bar" data-tone="${순서}" title="${Math.round(주파수)} Hz"><i></i></span>`,
-              )
+            ${Array.from({ length: 코드톤수 }, (_, 순서) => 순서)
+              .map((순서) => `<span class="eq-bar" data-tone="${순서}" title="${순서 + 1}"><i></i></span>`)
               .join('')}
           </div>
         </div>
@@ -379,7 +350,7 @@ const 멈춤단추 = 요소찾기<HTMLButtonElement>('stopButton')
 const 듣기단추 = 요소찾기<HTMLButtonElement>('listenButton')
 const 복사단추 = 요소찾기<HTMLButtonElement>('copyButton')
 const 단계값 = 요소찾기<HTMLElement>('phaseValue')
-const 심볼값 = 요소찾기<HTMLElement>('symbolValue')
+const 기호값 = 요소찾기<HTMLElement>('symbolValue')
 const 청크값 = 요소찾기<HTMLElement>('chunkValue')
 const 신호대잡음값 = 요소찾기<HTMLElement>('snrValue')
 const 남은시간값 = 요소찾기<HTMLElement>('etaValue')
@@ -390,12 +361,12 @@ let 송신준비중 = false
 let 수신: 수신상태 | null = null
 let 수신단계값: 수신단계 = '대기'
 let 수신버퍼: Float32Array<ArrayBufferLike> = new Float32Array(0)
-let 대기심볼: number[] = []
+let 대기기호: number[] = []
 let 예상본문바이트: number | null = null
 let 예상청크수 = 0
 let 예상반복수 = 청크반복
 let 받은바이트: number[] = []
-let 받은심볼수 = 0
+let 받은기호수 = 0
 let 메타순번 = 0
 
 텍스트상자.addEventListener('input', () => {
@@ -439,6 +410,10 @@ function 문구(키: keyof (typeof 글)['ko']): string {
   return 글[현재언어][키]
 }
 
+function 헤더문구찾기(키: 헤더오류키): string {
+  return 문구(키)
+}
+
 function 요소찾기<요소 extends HTMLElement>(아이디: string): 요소 {
   const 찾은요소 = document.getElementById(아이디)
   if (!찾은요소) throw new Error(`Missing #${아이디}`)
@@ -448,7 +423,7 @@ function 요소찾기<요소 extends HTMLElement>(아이디: string): 요소 {
 function 소리옵션HTML(): string {
   return (Object.keys(소리정체성목록) as 소리정체성[])
     .map((정체성) => {
-      const 선택됨 = 정체성 === '로파이' ? ' selected' : ''
+      const 선택됨 = 정체성 === '재즈피아노' ? ' selected' : ''
       return `<option value="${정체성}"${선택됨}>${소리정체성목록[정체성].이름[현재언어]}</option>`
     })
     .join('')
@@ -456,7 +431,7 @@ function 소리옵션HTML(): string {
 
 function 현재소리정체성(): 소리정체성 {
   const 값 = 소리선택.value as 소리정체성
-  return 값 in 소리정체성목록 ? 값 : '로파이'
+  return 값 in 소리정체성목록 ? 값 : '재즈피아노'
 }
 
 async function 메타갱신하기(): Promise<void> {
@@ -469,12 +444,12 @@ async function 메타갱신하기(): Promise<void> {
   const 프레임바이트수 = 압축된값.바이트.length
     ? 16 + 반복청크바이트수구하기(압축된값.바이트.length, 청크수, 청크반복)
     : 0
-  const 심볼수 = Math.ceil((프레임바이트수 * 8) / 3)
-  const 예상초 = 프레임바이트수 ? 프리앰블초 + 끝표식초 + (심볼수 * 심볼밀리초) / 1000 : 0
+  const 기호수 = 프레임바이트수 * 2
+  const 예상초 = 프레임바이트수 ? 프리앰블초 + 끝표식초 + 기호시간초구하기(기호수) : 0
   본문메타.textContent = `${원문.length} B ${문구('메타원문')} · ${압축된값.바이트.length} B ${압축표시}`
   미리보기원문.textContent = 바이트표시하기(원문.length)
   미리보기본문.textContent = `${바이트표시하기(압축된값.바이트.length)} ${압축표시}`
-  미리보기프레임.textContent = `${바이트표시하기(프레임바이트수)} · ${심볼수} ${문구('심볼')}`
+  미리보기프레임.textContent = `${바이트표시하기(프레임바이트수)} · ${기호수} ${문구('심볼')}`
   미리보기시간.textContent = 시간표시하기(예상초)
   미리보기반복.textContent = 프레임바이트수 ? `${청크반복}× · ${청크수} ${문구('청크들')}` : 문구('없음')
   길이경고.hidden = 원문.length <= 8192
@@ -507,12 +482,12 @@ async function 송신시작하기(): Promise<void> {
     await 화면그리기기다리기()
 
     const 프레임 = await 프레임만들기(텍스트)
-    const 심볼들 = 바이트를심볼로(프레임.바이트)
-    const 버퍼 = 오디오버퍼만들기(맥락, 심볼들, 현재소리정체성())
+    const 기호들 = 바이트를음악기호로(프레임.바이트)
+    const 오디오 = 오디오버퍼만들기(맥락, 기호들)
     const 소스 = 맥락.createBufferSource()
     const 이득 = 맥락.createGain()
 
-    소스.buffer = 버퍼
+    소스.buffer = 오디오.버퍼
     이득.gain.value = Number(볼륨슬라이더.value) / 100
     소스.connect(이득)
     이득.connect(맥락.destination)
@@ -526,8 +501,9 @@ async function 송신시작하기(): Promise<void> {
       이득,
       소스,
       시작초: 맥락.currentTime,
-      심볼수: 심볼들.length,
-      심볼들,
+      기호수: 기호들.length,
+      기호들,
+      기호누적초들: 오디오.기호누적초들,
     }
 
     맥락 = null
@@ -559,7 +535,7 @@ function 송신멈추기(강제멈춤 = true): void {
   void 송신.맥락.close()
   송신 = null
   단계쓰기(강제멈춤 ? 문구('멈춤상태') : 문구('보냄'))
-  심볼값.textContent = '0 / 0'
+  기호값.textContent = '0 / 0'
   남은시간값.textContent = '-'
   시각화그리기(null, 0)
   단추상태쓰기()
@@ -568,12 +544,12 @@ function 송신멈추기(강제멈춤 = true): void {
 function 송신틱(): void {
   if (!송신) return
   const 지난초 = 송신.맥락.currentTime - 송신.시작초 - 프리앰블초
-  const 보낸수 = Math.max(0, Math.min(송신.심볼수, Math.floor(지난초 / (심볼밀리초 / 1000))))
-  const 남은수 = Math.max(0, 송신.심볼수 - 보낸수)
-  const 현재심볼 = 보낸수 < 송신.심볼수 ? 송신.심볼들[보낸수] : null
-  심볼값.textContent = `${보낸수} / ${송신.심볼수}`
-  남은시간값.textContent = 남은수 ? `${Math.ceil((남은수 * 심볼밀리초) / 1000)}s` : '-'
-  시각화그리기(현재심볼, 송신.맥락.currentTime)
+  const 보낸수 = 기호위치찾기(송신.기호누적초들, 지난초)
+  const 남은초 = Math.max(0, 송신.기호누적초들[송신.기호수] - Math.max(0, 지난초))
+  const 현재기호 = 보낸수 < 송신.기호수 ? 송신.기호들[보낸수] : null
+  기호값.textContent = `${보낸수} / ${송신.기호수}`
+  남은시간값.textContent = 남은초 ? `${Math.ceil(남은초)}s` : '-'
+  시각화그리기(현재기호, 송신.맥락.currentTime)
   requestAnimationFrame(송신틱)
 }
 
@@ -625,14 +601,14 @@ function 수신멈추기(): void {
 
 function 수신초기화하기(): void {
   수신버퍼 = new Float32Array(0)
-  대기심볼 = []
+  대기기호 = []
   예상본문바이트 = null
   예상청크수 = 0
   예상반복수 = 청크반복
   받은바이트 = []
-  받은심볼수 = 0
+  받은기호수 = 0
   청크띠그리기(0)
-  심볼값.textContent = '0 / 0'
+  기호값.textContent = '0 / 0'
   청크값.textContent = '0 / 0'
   신호대잡음값.textContent = '-'
   남은시간값.textContent = '-'
@@ -651,15 +627,16 @@ function 소리처리하기(입력: Float32Array, 입력표본율: number): void
     return
   }
 
-  const 심볼표본수 = Math.round((입력표본율 * 심볼밀리초) / 1000)
-  while (수신버퍼.length >= 심볼표본수) {
-    const 창 = 수신버퍼.slice(0, 심볼표본수)
-    수신버퍼 = 수신버퍼.slice(심볼표본수)
-    const 판정 = 심볼찾기(창, 입력표본율)
-    대기심볼.push(판정.심볼)
-    받은심볼수 += 1
+  while (true) {
+    const 기호표본수 = Math.round(입력표본율 * 기호길이초구하기(받은기호수))
+    if (수신버퍼.length < 기호표본수) break
+    const 창 = 수신버퍼.slice(0, 기호표본수)
+    수신버퍼 = 수신버퍼.slice(기호표본수)
+    const 판정 = 음악기호찾기(창, 입력표본율, 받은기호수)
+    대기기호.push(판정.기호)
+    받은기호수 += 1
     신호대잡음값.textContent = `${판정.신호대잡음.toFixed(1)} dB`
-    심볼소비하기()
+    기호소비하기()
   }
 }
 
@@ -686,12 +663,12 @@ function 프리앰블찾기(입력표본율: number): boolean {
   return false
 }
 
-function 심볼소비하기(): void {
-  const 바이트들 = 심볼을바이트로(대기심볼)
+function 기호소비하기(): void {
+  const 바이트들 = 음악기호를바이트로(대기기호)
   if (바이트들.length < 16) return
 
   if (예상본문바이트 === null) {
-    const 읽은헤더 = 헤더읽기(바이트들.slice(0, 16))
+    const 읽은헤더 = 헤더읽기(바이트들.slice(0, 16), 헤더문구찾기)
     if (!읽은헤더.성공) {
       수신단계값 = '오류'
       단계쓰기(읽은헤더.이유)
@@ -706,9 +683,9 @@ function 심볼소비하기(): void {
 
   if (예상본문바이트 === null) return
   const 전체프레임바이트 = 16 + 반복청크바이트수구하기(예상본문바이트, 예상청크수, 예상반복수)
-  const 전체심볼수 = Math.ceil((전체프레임바이트 * 8) / 3)
-  심볼값.textContent = `${받은심볼수} / ${전체심볼수}`
-  남은시간값.textContent = `${Math.max(0, Math.ceil(((전체심볼수 - 받은심볼수) * 심볼밀리초) / 1000))}s`
+  const 전체기호수 = 전체프레임바이트 * 2
+  기호값.textContent = `${받은기호수} / ${전체기호수}`
+  남은시간값.textContent = `${Math.max(0, Math.ceil(기호구간시간초구하기(받은기호수, 전체기호수)))}s`
 
   if (바이트들.length < 전체프레임바이트) return
 
@@ -718,43 +695,19 @@ function 심볼소비하기(): void {
 
 async function 수신완료하기(): Promise<void> {
   if (예상본문바이트 === null) return
-  const 청크지도 = new Map<number, number[]>()
-  const 상태들: 청크상태[] = Array.from({ length: 예상청크수 }, () => '실패')
-  let 위치 = 16
+  const 복구 = 프레임복구하기(받은바이트, 헤더문구찾기)
+  청크띠그리기(복구.전체청크수, '대기', 복구.청크상태들)
+  청크값.textContent = `${복구.성공청크수} / ${복구.전체청크수}`
 
-  for (let 청크번호 = 0; 청크번호 < 예상청크수; 청크번호 += 1) {
-    const 남은크기 = 예상본문바이트 - 청크번호 * 청크크기
-    const 길이 = Math.min(청크크기, 남은크기)
-    for (let 반복번호 = 0; 반복번호 < 예상반복수; 반복번호 += 1) {
-      const 청크 = 받은바이트.slice(위치, 위치 + 길이)
-      const 기대검사합 = (받은바이트[위치 + 길이] << 8) | 받은바이트[위치 + 길이 + 1]
-      const 실제검사합 = 검사합16(new Uint8Array(청크))
-      위치 += 길이 + 2
-      if (실제검사합 === 기대검사합 && !청크지도.has(청크번호)) {
-        청크지도.set(청크번호, 청크)
-        상태들[청크번호] = '성공'
-      }
-    }
-  }
-
-  청크띠그리기(예상청크수, '대기', 상태들)
-  청크값.textContent = `${청크지도.size} / ${예상청크수}`
-
-  if (청크지도.size !== 예상청크수) {
+  if (!복구.성공) {
     수신단계값 = '오류'
-    단계쓰기(문구('청크실패'))
+    단계쓰기(복구.이유 === '청크실패' ? 문구('청크실패') : 복구.이유)
     수신멈추기()
     return
   }
 
   try {
-    const 본문: number[] = []
-    for (let 청크번호 = 0; 청크번호 < 예상청크수; 청크번호 += 1) {
-      본문.push(...(청크지도.get(청크번호) ?? []))
-    }
-    const 헤더 = 헤더읽기(받은바이트.slice(0, 16))
-    if (!헤더.성공) throw new Error(헤더.이유)
-    const 원문 = await 압축풀기(new Uint8Array(본문), 헤더.압축됨)
+    const 원문 = await 압축풀기(복구.본문, 복구.헤더.압축됨)
     텍스트상자.value = new TextDecoder().decode(원문)
     await 메타갱신하기()
     복사단추.disabled = false
@@ -768,242 +721,11 @@ async function 수신완료하기(): Promise<void> {
   }
 }
 
-async function 프레임만들기(텍스트: string): Promise<{ 바이트: Uint8Array; 청크수: number }> {
-  const 원문 = new TextEncoder().encode(텍스트)
-  const 압축된값 = await 압축하기(원문)
-  const 본문 = 압축된값.바이트
-  const 청크들: number[] = []
-
-  for (let 위치 = 0; 위치 < 본문.length; 위치 += 청크크기) {
-    const 청크 = 본문.slice(위치, 위치 + 청크크기)
-    const 검사합 = 검사합16(청크)
-    for (let 반복번호 = 0; 반복번호 < 청크반복; 반복번호 += 1) {
-      청크들.push(...청크, 검사합 >> 8, 검사합 & 0xff)
-    }
-  }
-
-  const 헤더 = new Uint8Array(16)
-  헤더.set(마법값, 0)
-  헤더[4] = 버전
-  헤더[5] = 균형모드
-  헤더[6] = (본문.length >> 16) & 0xff
-  헤더[7] = (본문.length >> 8) & 0xff
-  헤더[8] = 본문.length & 0xff
-  헤더[9] = 압축된값.압축됨 ? 1 : 0
-  헤더[12] = 청크반복
-  const 헤더검사합 = 헤더검사합구하기(헤더)
-  헤더[10] = (헤더검사합 >> 8) & 0xff
-  헤더[11] = 헤더검사합 & 0xff
-
-  const 프레임 = new Uint8Array(헤더.length + 청크들.length)
-  프레임.set(헤더, 0)
-  프레임.set(청크들, 헤더.length)
-  return { 바이트: 프레임, 청크수: Math.ceil(본문.length / 청크크기) }
-}
-
-function 헤더읽기(헤더: number[]): 헤더결과 {
-  if (!마법값.every((값, 순서) => 헤더[순서] === 값)) {
-    return { 성공: false, 이유: 문구('프레임없음') }
-  }
-  if (헤더[4] !== 버전 || 헤더[5] !== 균형모드) {
-    return { 성공: false, 이유: 문구('미지원프레임') }
-  }
-  const 기대검사합 = (헤더[10] << 8) | 헤더[11]
-  const 실제검사합 = 헤더검사합구하기(Uint8Array.from(헤더))
-  if (기대검사합 !== 실제검사합) {
-    return { 성공: false, 이유: 문구('헤더오류') }
-  }
-  const 본문길이 = (헤더[6] << 16) | (헤더[7] << 8) | 헤더[8]
-  if (!본문길이 || 본문길이 > 65_535) {
-    return { 성공: false, 이유: 문구('길이오류') }
-  }
-  return {
-    성공: true,
-    본문길이,
-    압축됨: 헤더[9] === 1,
-    반복수: Math.max(1, 헤더[12] || 1),
-  }
-}
-
-function 바이트를심볼로(바이트들: Uint8Array): number[] {
-  const 심볼들: number[] = []
-  let 누산기 = 0
-  let 비트수 = 0
-
-  for (const 바이트 of 바이트들) {
-    누산기 = (누산기 << 8) | 바이트
-    비트수 += 8
-    while (비트수 >= 3) {
-      비트수 -= 3
-      심볼들.push((누산기 >> 비트수) & 0b111)
-    }
-  }
-
-  if (비트수 > 0) {
-    심볼들.push((누산기 << (3 - 비트수)) & 0b111)
-  }
-
-  return 심볼들
-}
-
-function 심볼을바이트로(심볼들: number[]): number[] {
-  const 바이트들: number[] = []
-  let 누산기 = 0
-  let 비트수 = 0
-
-  for (const 심볼 of 심볼들) {
-    누산기 = (누산기 << 3) | (심볼 & 0b111)
-    비트수 += 3
-    while (비트수 >= 8) {
-      비트수 -= 8
-      바이트들.push((누산기 >> 비트수) & 0xff)
-    }
-  }
-
-  return 바이트들
-}
-
-function 오디오버퍼만들기(맥락: AudioContext, 심볼들: number[], 정체성: 소리정체성): AudioBuffer {
-  const 프리앰블표본수 = Math.floor(맥락.sampleRate * 프리앰블초)
-  const 심볼표본수 = Math.floor((맥락.sampleRate * 심볼밀리초) / 1000)
-  const 끝표식표본수 = Math.floor(맥락.sampleRate * 끝표식초)
-  const 전체표본수 = 프리앰블표본수 + 심볼들.length * 심볼표본수 + 끝표식표본수
-  const 버퍼 = 맥락.createBuffer(1, 전체표본수, 맥락.sampleRate)
-  const 채널 = 버퍼.getChannelData(0)
-  let 위치 = 0
-
-  for (let 순서 = 0; 순서 < 10; 순서 += 1) {
-    위치 = 톤쓰기(채널, 위치, 맥락.sampleRate, 프리앰블주파수[순서 % 2], 프리앰블표본수 / 10, '깨끗함', 순서)
-  }
-
-  for (let 순서 = 0; 순서 < 심볼들.length; 순서 += 1) {
-    위치 = 톤쓰기(채널, 위치, 맥락.sampleRate, 데이터주파수[심볼들[순서]], 심볼표본수, 정체성, 순서)
-  }
-
-  for (let 순서 = 0; 순서 < 4; 순서 += 1) {
-    위치 = 톤쓰기(채널, 위치, 맥락.sampleRate, 끝표식주파수[순서 % 2], 끝표식표본수 / 4, '깨끗함', 순서)
-  }
-
-  return 버퍼
-}
-
-function 톤쓰기(
-  채널: Float32Array,
-  위치: number,
-  출력표본율: number,
-  주파수: number,
-  표본수: number,
-  정체성: 소리정체성,
-  심볼순서: number,
-): number {
-  const 개수 = Math.floor(표본수)
-  for (let 순서 = 0; 순서 < 개수 && 위치 + 순서 < 채널.length; 순서 += 1) {
-    const 상대초 = 순서 / 출력표본율
-    const 절대초 = (위치 + 순서) / 출력표본율
-    const 포락선 = Math.min(1, 순서 / 128, (개수 - 순서) / 128)
-    채널[위치 + 순서] = 톤모양내기(주파수, 상대초, 절대초, 정체성, 심볼순서) * 포락선 * 0.82
-  }
-  return 위치 + 개수
-}
-
-function 톤모양내기(주파수: number, 상대초: number, 절대초: number, 정체성: 소리정체성, 심볼순서: number): number {
-  const 기본파 = Math.sin(2 * Math.PI * 주파수 * 상대초)
-
-  if (정체성 === '깨끗함') {
-    return 기본파
-  }
-
-  if (정체성 === '로파이') {
-    const 흔들림 = 1 + 0.018 * Math.sin(2 * Math.PI * 4.2 * 절대초)
-    const 먼지 = 의사잡음(심볼순서, Math.floor(상대초 * 600)) * 0.012
-    return Math.tanh(
-      Math.sin(2 * Math.PI * 주파수 * 흔들림 * 상대초) * 0.92 +
-        Math.sin(2 * Math.PI * 주파수 * 2 * 상대초) * 0.08 +
-        먼지,
-    )
-  }
-
-  if (정체성 === '블루스') {
-    const 떨림 = 0.82 + 0.18 * Math.sin(2 * Math.PI * 5.5 * 절대초)
-    return Math.tanh((기본파 + Math.sin(2 * Math.PI * 주파수 * 2 * 상대초) * 0.16) * 떨림)
-  }
-
-  if (정체성 === '재즈') {
-    const 공기 = Math.sin(2 * Math.PI * 주파수 * 1.5 * 상대초) * 0.08
-    const 방울림 = Math.sin(2 * Math.PI * 주파수 * 2 * 상대초 + 0.35) * 0.1
-    return Math.tanh(기본파 * 0.9 + 공기 + 방울림)
-  }
-
-  const 게이트 = 0.58 + 0.42 * (Math.sin(2 * Math.PI * 8 * 절대초) > 0 ? 1 : 0.18)
-  const 으르렁 = Math.sin(2 * Math.PI * 주파수 * 0.5 * 상대초) * 0.12
-  return Math.tanh((기본파 + 으르렁 + Math.sin(2 * Math.PI * 주파수 * 2 * 상대초) * 0.18) * 게이트)
-}
-
-function 의사잡음(씨앗: number, 눈금: number): number {
-  const 값 = Math.sin((씨앗 + 1) * 12.9898 + 눈금 * 78.233) * 43758.5453
-  return 값 - Math.floor(값) - 0.5
-}
-
-function 심볼찾기(표본들: Float32Array, 입력표본율: number): { 심볼: number; 신호대잡음: number } {
-  const 에너지들 = 데이터주파수.map((주파수) => 괴르첼(표본들, 입력표본율, 주파수))
-  let 최고 = 0
-  let 차점 = 0
-  for (const 에너지 of 에너지들) {
-    if (에너지 > 최고) {
-      차점 = 최고
-      최고 = 에너지
-    } else if (에너지 > 차점) {
-      차점 = 에너지
-    }
-  }
-  const 심볼 = 에너지들.indexOf(최고)
-  const 신호대잡음 = 10 * Math.log10((최고 + 1e-12) / (차점 + 1e-12))
-  return { 심볼, 신호대잡음 }
-}
-
-function 괴르첼(표본들: Float32Array, 입력표본율: number, 주파수: number): number {
-  const 오메가 = (2 * Math.PI * 주파수) / 입력표본율
-  const 계수 = 2 * Math.cos(오메가)
-  let 현재값 = 0
-  let 이전값 = 0
-  let 전전값 = 0
-
-  for (const 표본 of 표본들) {
-    현재값 = 계수 * 이전값 - 전전값 + 표본
-    전전값 = 이전값
-    이전값 = 현재값
-  }
-
-  return 이전값 * 이전값 + 전전값 * 전전값 - 계수 * 이전값 * 전전값
-}
-
-function 검사합16(바이트들: Uint8Array): number {
-  let 검사합 = 0xffff
-  for (const 바이트 of 바이트들) {
-    검사합 ^= 바이트 << 8
-    for (let 비트 = 0; 비트 < 8; 비트 += 1) {
-      검사합 = 검사합 & 0x8000 ? (검사합 << 1) ^ 0x1021 : 검사합 << 1
-      검사합 &= 0xffff
-    }
-  }
-  return 검사합
-}
-
-function 헤더검사합구하기(헤더: Uint8Array): number {
-  const 검사대상 = new Uint8Array(14)
-  검사대상.set(헤더.slice(0, 10), 0)
-  검사대상.set(헤더.slice(12, 16), 10)
-  return 검사합16(검사대상)
-}
-
-function 반복청크바이트수구하기(본문길이: number, 청크수: number, 반복수: number): number {
-  let 합계 = 0
-  for (let 청크번호 = 0; 청크번호 < 청크수; 청크번호 += 1) {
-    const 남은크기 = 본문길이 - 청크번호 * 청크크기
-    const 길이 = Math.min(청크크기, 남은크기)
-    합계 += (길이 + 2) * 반복수
-  }
-  return 합계
+function 오디오버퍼만들기(맥락: AudioContext, 기호들: number[]): 오디오결과 {
+  const 표본결과 = 오디오표본만들기(기호들, 맥락.sampleRate)
+  const 버퍼 = 맥락.createBuffer(1, 표본결과.표본들.length, 맥락.sampleRate)
+  버퍼.getChannelData(0).set(표본결과.표본들)
+  return { 버퍼, 기호누적초들: 표본결과.기호누적초들 }
 }
 
 function 바이트표시하기(바이트수: number): string {
@@ -1017,39 +739,6 @@ function 시간표시하기(초: number): string {
   const 분 = Math.floor(초 / 60)
   const 남은초 = Math.round(초 % 60)
   return `${분}m ${남은초}s`
-}
-
-async function 압축하기(원문: Uint8Array): Promise<압축결과> {
-  if (!('CompressionStream' in globalThis)) {
-    return { 바이트: 원문, 압축됨: false }
-  }
-
-  try {
-    const 압축바이트 = await 스트림변환하기(원문, new CompressionStream('deflate'))
-    if (압축바이트.length < 원문.length) {
-      return { 바이트: 압축바이트, 압축됨: true }
-    }
-  } catch {
-    return { 바이트: 원문, 압축됨: false }
-  }
-
-  return { 바이트: 원문, 압축됨: false }
-}
-
-async function 압축풀기(본문: Uint8Array, 압축됨: boolean): Promise<Uint8Array> {
-  if (!압축됨) return 본문
-  if (!('DecompressionStream' in globalThis)) {
-    throw new Error(문구('해제불가'))
-  }
-  return 스트림변환하기(본문, new DecompressionStream('deflate'))
-}
-
-async function 스트림변환하기(바이트들: Uint8Array, 변환: CompressionStream | DecompressionStream): Promise<Uint8Array> {
-  const 복사본 = new Uint8Array(바이트들.length)
-  복사본.set(바이트들)
-  const 흐름 = new Blob([복사본.buffer]).stream().pipeThrough(변환)
-  const 응답 = new Response(흐름)
-  return new Uint8Array(await 응답.arrayBuffer())
 }
 
 function 이어붙이기(왼쪽: Float32Array<ArrayBufferLike>, 오른쪽: Float32Array): Float32Array<ArrayBufferLike> {
@@ -1082,17 +771,19 @@ function 화면그리기기다리기(): Promise<void> {
   })
 }
 
-function 시각화그리기(심볼: number | null, 시간초: number): void {
+function 시각화그리기(기호: number | null, 시간초: number): void {
   const 볼륨 = Number(볼륨슬라이더.value) / 100
-  const 움직임 = 심볼 === null ? 0 : 0.72 + 0.18 * Math.sin(시간초 * Math.PI * 8)
+  const 피치번호 = 기호 === null ? null : (기호 >> 2) & 0b11
+  const 리듬번호 = 기호 === null ? 0 : 기호 & 0b11
+  const 움직임 = 기호 === null ? 0 : 0.62 + 리듬번호 * 0.08 + 0.14 * Math.sin(시간초 * Math.PI * 8)
   출력레벨막대.style.width = `${Math.max(0, Math.min(100, 볼륨 * 움직임 * 100))}%`
 
   이큐막대들.forEach((막대, 순서) => {
-    const 가까움 = 심볼 === null ? 0 : Math.max(0, 1 - Math.abs(순서 - 심볼) / 2.5)
-    const 바닥 = 심볼 === null ? 7 : 12 + 의사잡음(순서, Math.floor(시간초 * 16)) * 6
+    const 가까움 = 피치번호 === null ? 0 : 순서 === 피치번호 ? 1 : 0.16
+    const 바닥 = 피치번호 === null ? 7 : 14 + 의사잡음(순서, Math.floor(시간초 * 16)) * 6
     const 높이 = Math.max(6, Math.min(100, 바닥 + 가까움 * 78 * 볼륨))
     막대.style.height = `${높이}%`
-    막대.style.opacity = 심볼 === null ? '0.45' : 가까움 > 0.6 ? '1' : '0.62'
+    막대.style.opacity = 피치번호 === null ? '0.45' : 가까움 > 0.6 ? '1' : '0.58'
   })
 }
 

@@ -1,5 +1,5 @@
 {
-  "name": "sonopaste",
+  "name": "jazzmodem",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,6 +10,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "build:cf": "VITE_BASE_PATH=/ npm run build",
+    "build:tests": "tsc -p tsconfig.test.json",
+    "test": "npm run build:tests && node --test .test-build/tests/**/*.test.js",
     "preview": "vite preview"
   },
   "devDependencies": {
