@@ -69,7 +69,7 @@ const 글 = {
     길이경고: '8KB가 넘으면 전송 시간이 길어지고 실패 확률이 높아집니다.',
     모드: '모드',
     균형: '재즈',
-    모드설명: '138BPM 스윙 8분 그리드 위에 보이싱 3비트 + 길이 2비트 + 당김 1비트를 싣고, 깨진 청크는 CRC로 검출합니다.',
+    모드설명: '138BPM 스윙 8분 그리드 위에 보이싱 3비트 + 컴핑 리듬 3비트를 싣고, 깨진 청크는 CRC로 검출합니다.',
     볼륨: '출력 볼륨',
     소리정체성: '모뎀 보이싱',
     보내기: '보내기',
@@ -136,7 +136,7 @@ const 글 = {
     길이경고: 'Over 8KB takes longer and is more likely to fail.',
     모드: 'Mode',
     균형: 'Jazz',
-    모드설명: 'Voicing, duration, and pushed timing ride on a 138 BPM swing-eighth grid; CRC detects broken chunks.',
+    모드설명: '3 bits of voicing plus 3 bits of comping rhythm ride on a 138 BPM swing-eighth grid; CRC detects broken chunks.',
     볼륨: 'Output volume',
     소리정체성: 'Modem voicing',
     보내기: 'Send',
@@ -674,26 +674,63 @@ function 소리처리하기(입력: Float32Array, 입력표본율: number): void
 }
 
 function 프리앰블찾기(입력표본율: number): boolean {
-  const 톤표본수 = Math.round(입력표본율 * 0.1)
   const 창수 = 10
+  const 톤표본수 = Math.round((입력표본율 * 프리앰블초) / 창수)
   const 필요수 = 톤표본수 * 창수
   if (수신버퍼.length < 필요수) return false
 
-  const 꼬리 = 수신버퍼.slice(수신버퍼.length - 필요수)
-  let 맞은수 = 0
-  for (let 순서 = 0; 순서 < 창수; 순서 += 1) {
-    const 시작 = 순서 * 톤표본수
-    const 창 = 꼬리.slice(시작, 시작 + 톤표본수)
-    const 에너지들 = 프리앰블주파수.map((주파수) => 괴르첼(창, 입력표본율, 주파수))
-    const 승자 = 에너지들[0] > 에너지들[1] ? 0 : 1
-    if (승자 === 순서 % 2 && Math.max(...에너지들) > 0.002) 맞은수 += 1
+  const 검색끝 = 수신버퍼.length - 필요수
+  const 검색너비 = Math.round(입력표본율 * 0.8)
+  const 시작위치 = Math.max(0, 검색끝 - 검색너비)
+  const 간격 = Math.max(1, Math.round(입력표본율 * 0.02))
+  let 최고점수 = Number.NEGATIVE_INFINITY
+  let 최고맞은수 = 0
+  let 최고위치 = 0
+
+  for (let 후보위치 = 시작위치; 후보위치 <= 검색끝; 후보위치 += 간격) {
+    const 판정 = 프리앰블후보평가하기(후보위치, 톤표본수, 창수, 입력표본율)
+    if (판정.점수 > 최고점수) {
+      최고점수 = 판정.점수
+      최고맞은수 = 판정.맞은수
+      최고위치 = 후보위치
+    }
   }
 
-  if (맞은수 >= 8) {
-    수신버퍼 = new Float32Array(0)
+  const 끝판정 = 프리앰블후보평가하기(검색끝, 톤표본수, 창수, 입력표본율)
+  if (끝판정.점수 > 최고점수) {
+    최고점수 = 끝판정.점수
+    최고맞은수 = 끝판정.맞은수
+    최고위치 = 검색끝
+  }
+
+  if (최고맞은수 >= 8 && 최고점수 >= 3.8) {
+    수신버퍼 = 수신버퍼.slice(최고위치 + 필요수)
     return true
   }
   return false
+}
+
+function 프리앰블후보평가하기(
+  시작위치: number,
+  톤표본수: number,
+  창수: number,
+  입력표본율: number,
+): { 맞은수: number; 점수: number } {
+  let 맞은수 = 0
+  let 점수 = 0
+
+  for (let 순서 = 0; 순서 < 창수; 순서 += 1) {
+    const 시작 = 시작위치 + 순서 * 톤표본수
+    const 창 = 수신버퍼.slice(시작, 시작 + 톤표본수)
+    const 에너지들 = 프리앰블주파수.map((주파수) => 괴르첼(창, 입력표본율, 주파수))
+    const 기대값 = 에너지들[순서 % 2]
+    const 반대값 = 에너지들[(순서 + 1) % 2]
+    const 비율 = (기대값 + 1e-12) / (반대값 + 1e-12)
+    점수 += Math.log2(Math.max(1e-6, 비율))
+    if (기대값 > 반대값) 맞은수 += 1
+  }
+
+  return { 맞은수, 점수 }
 }
 
 function 기호소비하기(): void {
@@ -842,9 +879,8 @@ function 화면그리기기다리기(): Promise<void> {
 function 시각화그리기(기호: number | null, 시간초: number): void {
   const 볼륨 = Number(볼륨슬라이더.value) / 100
   const 보이싱번호 = 기호 === null ? null : 기호 & 0b111
-  const 길이번호 = 기호 === null ? 0 : (기호 >> 3) & 0b11
-  const 당김번호 = 기호 === null ? 0 : (기호 >> 5) & 0b1
-  const 움직임 = 기호 === null ? 0 : 0.58 + 길이번호 * 0.07 + 당김번호 * 0.08 + 0.1 * Math.sin(시간초 * Math.PI * 8)
+  const 리듬번호 = 기호 === null ? 0 : (기호 >> 3) & 0b111
+  const 움직임 = 기호 === null ? 0 : 0.52 + (리듬번호 % 4) * 0.055 + Math.floor(리듬번호 / 4) * 0.1 + 0.1 * Math.sin(시간초 * Math.PI * 8)
   출력레벨막대.style.width = `${Math.max(0, Math.min(100, 볼륨 * 움직임 * 100))}%`
 
   이큐막대들.forEach((막대, 순서) => {
