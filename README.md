@@ -40,10 +40,10 @@ npm run build
 
 정적 산출물은 `dist/`에 생성됩니다.
 
-GitHub Pages용 빌드는 커스텀 도메인 `sonopaste.midagedev.com`에 맞춰 `/` base path를 사용합니다.
+Cloudflare Pages용 빌드는 커스텀 도메인 `sonopaste.midagedev.com`에 맞춰 `/` base path를 사용합니다.
 
 ```bash
-npm run build:gh
+npm run build:cf
 ```
 
 ## 브라우저 요구사항
