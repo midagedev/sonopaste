@@ -40,6 +40,12 @@ npm run build
 
 정적 산출물은 `dist/`에 생성됩니다.
 
+GitHub Pages용 빌드는 `/sonopaste/` base path를 사용합니다.
+
+```bash
+npm run build:gh
+```
+
 ## 브라우저 요구사항
 
 송신은 Web Audio API를 사용합니다. 수신은 마이크 권한이 필요하므로 배포 환경에서는 HTTPS가 필요합니다.
