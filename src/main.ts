@@ -7,11 +7,12 @@ import {
   음악기호를바이트로,
   음악기호찾기,
   오디오표본만들기,
-  코드톤수,
+  성부수,
+  성부비트수,
+  성부후보수,
   기호비트수,
   괴르첼,
   끝표식초,
-  청크반복,
   청크크기,
   부분프레임읽기,
   프레임복구하기,
@@ -19,7 +20,8 @@ import {
   프리앰블주파수,
   프리앰블초,
   표본율,
-  반복청크바이트수구하기,
+  알에스블록들구하기,
+  전체프레임바이트구하기,
   기호길이초구하기,
   기호구간시간초구하기,
   기호시간초구하기,
@@ -69,7 +71,8 @@ const 글 = {
     길이경고: '8KB가 넘으면 전송 시간이 길어지고 실패 확률이 높아집니다.',
     모드: '모드',
     균형: '재즈',
-    모드설명: '138BPM 스윙 8분 그리드 위에 보이싱 3비트 + 컴핑 리듬 3비트를 싣고, 깨진 청크는 CRC로 검출합니다.',
+    모드설명:
+      '138BPM 스윙 8분 그리드 위에서 베이스·가이드 톤이 코드를 짚고, 그 위 3개 성부에 각각 3비트씩(심볼당 9비트) 데이터를 실어 리드-솔로몬 패리티로 복구합니다.',
     볼륨: '출력 볼륨',
     소리정체성: '모뎀 보이싱',
     보내기: '보내기',
@@ -81,10 +84,10 @@ const 글 = {
     프리앰블: '프리앰블',
     압축: '압축',
     복구: '검증',
-    청크값: '64B × 1 + CRC16',
+    청크값: '64B + CRC16',
     프리앰블값: '1.0초 투톤 카운트인',
     압축값: '스트리밍 UTF-8 청크',
-    복구값: 'CRC-16으로 깨진 청크 검출',
+    복구값: '리드-솔로몬으로 깨진 청크 복구',
     단계: '단계',
     심볼: '음표',
     청크들: '청크',
@@ -117,7 +120,7 @@ const 글 = {
     본문크기: '전송 본문',
     프레임크기: '실제 프레임',
     예상전송시간: '예상 전송 시간',
-    복구반복: '청크 반복',
+    복구반복: '데이터+패리티 청크',
     소리시각화: '레벨과 톤',
     출력레벨: '출력 레벨',
     톤분포: '보이싱',
@@ -136,7 +139,8 @@ const 글 = {
     길이경고: 'Over 8KB takes longer and is more likely to fail.',
     모드: 'Mode',
     균형: 'Jazz',
-    모드설명: '3 bits of voicing plus 3 bits of comping rhythm ride on a 138 BPM swing-eighth grid; CRC detects broken chunks.',
+    모드설명:
+      'Bass and guide tones spell the chord while 3 voices above carry 3 bits each (9 bits per symbol) on a 138 BPM swing-eighth grid; Reed-Solomon parity recovers broken chunks.',
     볼륨: 'Output volume',
     소리정체성: 'Modem voicing',
     보내기: 'Send',
@@ -148,10 +152,10 @@ const 글 = {
     프리앰블: 'Preamble',
     압축: 'Compression',
     복구: 'Check',
-    청크값: '64 B × 1 + CRC16',
+    청크값: '64 B + CRC16',
     프리앰블값: '1.0 s two-tone count-in',
     압축값: 'Streaming UTF-8 chunks',
-    복구값: 'CRC-16 detects broken chunks',
+    복구값: 'Reed-Solomon recovers broken chunks',
     단계: 'Phase',
     심볼: 'Notes',
     청크들: 'Chunks',
@@ -184,7 +188,7 @@ const 글 = {
     본문크기: 'Payload',
     프레임크기: 'On-air frame',
     예상전송시간: 'Estimated send time',
-    복구반복: 'Chunk repeat',
+    복구반복: 'Data + parity chunks',
     소리시각화: 'Level & tone',
     출력레벨: 'Output level',
     톤분포: 'Voicing',
@@ -282,7 +286,7 @@ if (!뿌리) {
             </div>
             <div>
               <dt>${문구('복구반복')}</dt>
-              <dd id="previewRepeat">${청크반복}×</dd>
+              <dd id="previewRepeat">${문구('없음')}</dd>
             </div>
           </dl>
         </div>
@@ -297,7 +301,7 @@ if (!뿌리) {
             <div class="vu-track"><i id="vuFill"></i></div>
           </div>
           <div class="eq-grid" id="eqGrid">
-            ${Array.from({ length: 코드톤수 }, (_, 순서) => 순서)
+            ${Array.from({ length: 성부수 }, (_, 순서) => 순서)
               .map((순서) => `<span class="eq-bar" data-tone="${순서}" title="${순서 + 1}"><i></i></span>`)
               .join('')}
           </div>
@@ -391,7 +395,6 @@ let 수신버퍼: Float32Array<ArrayBufferLike> = new Float32Array(0)
 let 대기기호: number[] = []
 let 예상본문바이트: number | null = null
 let 예상청크수 = 0
-let 예상반복수 = 청크반복
 let 받은바이트: number[] = []
 let 받은기호수 = 0
 let 수신해독기 = new TextDecoder()
@@ -467,13 +470,12 @@ function 현재소리정체성(): 소리정체성 {
 async function 메타갱신하기(): Promise<void> {
   const 현재순번 = ++메타순번
   const 원문 = new TextEncoder().encode(텍스트상자.value)
-  const 압축된값 = 원문.length ? 전송본문만들기(원문) : { 바이트: new Uint8Array(), 압축됨: false }
+  const 압축된값 = 원문.length ? await 전송본문만들기(원문) : { 바이트: new Uint8Array(), 압축됨: false }
   if (현재순번 !== 메타순번) return
   const 압축표시 = 압축된값.압축됨 ? 문구('메타압축') : 문구('메타압축없음')
   const 청크수 = 압축된값.바이트.length ? Math.ceil(압축된값.바이트.length / 청크크기) : 0
-  const 프레임바이트수 = 압축된값.바이트.length
-    ? 16 + 반복청크바이트수구하기(압축된값.바이트.length, 청크수, 청크반복)
-    : 0
+  const 패리티수 = 청크수 ? 알에스블록들구하기(청크수).reduce((합, 블록) => 합 + 블록.패리티수, 0) : 0
+  const 프레임바이트수 = 압축된값.바이트.length ? 전체프레임바이트구하기(압축된값.바이트.length) : 0
   const 기호수 = Math.ceil((프레임바이트수 * 8) / 기호비트수)
   const 예상초 = 프레임바이트수 ? 프리앰블초 + 끝표식초 + 기호시간초구하기(기호수) : 0
   본문메타.textContent = `${원문.length} B ${문구('메타원문')} · ${압축된값.바이트.length} B ${압축표시}`
@@ -481,7 +483,7 @@ async function 메타갱신하기(): Promise<void> {
   미리보기본문.textContent = `${바이트표시하기(압축된값.바이트.length)} ${압축표시}`
   미리보기프레임.textContent = `${바이트표시하기(프레임바이트수)} · ${기호수} ${문구('심볼')}`
   미리보기시간.textContent = 시간표시하기(예상초)
-  미리보기반복.textContent = 프레임바이트수 ? `${청크반복}× · ${청크수} ${문구('청크들')}` : 문구('없음')
+  미리보기반복.textContent = 프레임바이트수 ? `${청크수} + ${패리티수}` : 문구('없음')
   길이경고.hidden = 원문.length <= 8192
   복사단추.disabled = !텍스트상자.value
 }
@@ -634,7 +636,6 @@ function 수신초기화하기(): void {
   대기기호 = []
   예상본문바이트 = null
   예상청크수 = 0
-  예상반복수 = 청크반복
   받은바이트 = []
   받은기호수 = 0
   수신해독기 = new TextDecoder()
@@ -747,14 +748,13 @@ function 기호소비하기(): void {
     }
     예상본문바이트 = 읽은헤더.본문길이
     예상청크수 = Math.ceil(읽은헤더.본문길이 / 청크크기)
-    예상반복수 = 읽은헤더.반복수
     수신표시초기화하기()
     청크띠그리기(예상청크수, '대기')
   }
 
   if (예상본문바이트 === null) return
   const 부분프레임 = 부분프레임읽기(바이트들, 헤더문구찾기)
-  const 전체프레임바이트 = 부분프레임.전체프레임바이트 || 16 + 반복청크바이트수구하기(예상본문바이트, 예상청크수, 예상반복수)
+  const 전체프레임바이트 = 부분프레임.전체프레임바이트 || 전체프레임바이트구하기(예상본문바이트)
   const 전체기호수 = Math.ceil((전체프레임바이트 * 8) / 기호비트수)
   기호값.textContent = `${받은기호수} / ${전체기호수}`
   남은시간값.textContent = `${Math.max(0, Math.ceil(기호구간시간초구하기(받은기호수, 전체기호수)))}s`
@@ -878,17 +878,20 @@ function 화면그리기기다리기(): Promise<void> {
 
 function 시각화그리기(기호: number | null, 시간초: number): void {
   const 볼륨 = Number(볼륨슬라이더.value) / 100
-  const 보이싱번호 = 기호 === null ? null : 기호 & 0b111
-  const 리듬번호 = 기호 === null ? 0 : (기호 >> 3) & 0b111
-  const 움직임 = 기호 === null ? 0 : 0.52 + (리듬번호 % 4) * 0.055 + Math.floor(리듬번호 / 4) * 0.1 + 0.1 * Math.sin(시간초 * Math.PI * 8)
+  const 성부값들 =
+    기호 === null
+      ? null
+      : Array.from({ length: 성부수 }, (_, 성부) => (기호 >> (성부 * 성부비트수)) & (성부후보수 - 1))
+  const 움직임 = 기호 === null ? 0 : 0.6 + 0.14 * Math.sin(시간초 * Math.PI * 8)
   출력레벨막대.style.width = `${Math.max(0, Math.min(100, 볼륨 * 움직임 * 100))}%`
 
   이큐막대들.forEach((막대, 순서) => {
-    const 가까움 = 보이싱번호 === null ? 0 : 순서 === 보이싱번호 ? 1 : 0.16
-    const 바닥 = 보이싱번호 === null ? 7 : 14 + 의사잡음(순서, Math.floor(시간초 * 16)) * 6
-    const 높이 = Math.max(6, Math.min(100, 바닥 + 가까움 * 78 * 볼륨))
+    const 값 = 성부값들 ? 성부값들[순서] ?? 0 : 0
+    const 채움 = 성부값들 ? 0.22 + (값 / (성부후보수 - 1)) * 0.78 : 0
+    const 바닥 = 성부값들 === null ? 7 : 12 + 의사잡음(순서, Math.floor(시간초 * 16)) * 5
+    const 높이 = Math.max(6, Math.min(100, 바닥 + 채움 * 80 * 볼륨))
     막대.style.height = `${높이}%`
-    막대.style.opacity = 보이싱번호 === null ? '0.45' : 가까움 > 0.6 ? '1' : '0.58'
+    막대.style.opacity = 성부값들 === null ? '0.45' : '0.85'
   })
 }
 
